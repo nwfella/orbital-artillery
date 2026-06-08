@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orbital Artillery</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050510;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            text-shadow: 0 0 5px #fff;
+        }
+        .p1-text { color: #00ffff; text-shadow: 0 0 8px #00ffff; }
+        .p2-text { color: #ff00ff; text-shadow: 0 0 8px #ff00ff; }
+        #score {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 1rem;
+            text-align: right;
+            pointer-events: none;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #aaa;
+            font-size: 14px;
+            pointer-events: none;
+        }
+        #message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 48px;
+            font-weight: bold;
+            text-align: center;
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+        #restart-btn {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            padding: 8px 16px;
+            background: #1a1a3e;
+            border: 1px solid #555;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+            pointer-events: all;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        #restart-btn:hover {
+            background: #2a2a5e;
+            border-color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h2 id="turn-indicator" class="p1-text">Player 1's Turn</h2>
+        <div style="font-size: 1.2rem;">
+            Angle: <span id="angle-val">0</span>&deg;<br>
+            Power: <span id="power-val">50</span>
+        </div>
+    </div>
+
+    <div id="score">
+        <span class="p1-text">P1: <span id="score-p1">0</span></span><br>
+        <span class="p2-text">P2: <span id="score-p2">0</span></span>
+    </div>
+
+    <div id="message" style="opacity: 0;"></div>
+
+    <div id="instructions">
+        [A]/[D] or [Left]/[Right] : Adjust Angle<br>
+        [W]/[S] or [Up]/[Down]    : Adjust Power<br>
+        [SPACE]                   : Fire Proton Cannon
+    </div>
+
+    <button id="restart-btn">↻ New Game</button>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const angleDisplay = document.getElementById('angle-val');
+        const powerDisplay = document.getElementById('power-val');
+        const turnIndicator = document.getElementById('turn-indicator');
+        const messageBox = document.getElementById('message');
+        const scoreP1 = document.getElementById('score-p1');
+        const scoreP2 = document.getElementById('score-p2');
+        const restartBtn = document.getElementById('restart-btn');
+
+        let width, height, cx, cy;
+        
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            cx = width / 2;
+            cy = height / 2;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Game Constants & State
+        const G = 1500;
+        const SUN_RADIUS = 30;
+        let state = 'aiming'; // aiming, firing, reset
+        let currentPlayer = 1;
+        let p1, p2, projectile;
+        let scores = { 1: 0, 2: 0 };
+        let frameCount = 0;
+        
+        // Input state
+        const keys = {};
+
+        class Planet {
+            constructor(radius, orbitRadius, orbitSpeed, color, startAngle) {
+                this.r = radius;
+                this.orbitRadius = orbitRadius;
+                this.orbitSpeed = orbitSpeed;
+                this.color = color;
+                this.angle = startAngle;
+                this.x = 0;
+                this.y = 0;
+                this.aimAngle = Math.PI * 1.5;
+                this.power = 60;
+                this.orbitTicks = 0;
+                this.updatePosition();
+            }
+
+            updatePosition() {
+                this.angle += this.orbitSpeed;
+                this.x = cx + Math.cos(this.angle) * this.orbitRadius;
+                this.y = cy + Math.sin(this.angle) * this.orbitRadius;
+                this.orbitTicks++;
+            }
+
+            draw() {
+                // Draw Orbit Path
+                ctx.beginPath();
+                ctx.arc(cx, cy, this.orbitRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 8]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Draw Planet glow
+                const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.r * 2);
+                grad.addColorStop(0, this.color + '44');
+                grad.addColorStop(1, 'transparent');
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r * 2, 0, Math.PI * 2);
+                ctx.fillStyle = grad;
+                ctx.fill();
+
+                // Draw Planet body
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Surface detail - a simple equator line
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r * 0.7, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Draw Cannon if this player's turn
+                if (state === 'aiming' && ((currentPlayer === 1 && this === p1) || (currentPlayer === 2 && this === p2))) {
+                    // Cannon barrel
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    const cannonEndX = this.x + Math.cos(this.aimAngle) * (this.r + 18);
+                    const cannonEndY = this.y + Math.sin(this.aimAngle) * (this.r + 18);
+                    ctx.lineTo(cannonEndX, cannonEndY);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 4;
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = '#fff';
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+
+                    // Cannon tip
+                    ctx.beginPath();
+                    ctx.arc(cannonEndX, cannonEndY, 3, 0, Math.PI * 2);
+                    ctx.fillStyle = '#ff0';
+                    ctx.shadowBlur = 8;
+                    ctx.shadowColor = '#ff0';
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            containsPoint(px, py) {
+                const dx = this.x - px;
+                const dy = this.y - py;
+                return Math.sqrt(dx * dx + dy * dy) < this.r;
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, angle, power, color) {
+                this.x = x;
+                this.y = y;
+                const v = power * 0.12;
+                this.vx = Math.cos(angle) * v;
+                this.vy = Math.sin(angle) * v;
+                this.color = color;
+                this.trail = [];
+                this.active = true;
+                this.age = 0;
+                this.maxAge = 600;
+            }
+
+            update() {
+                if (!this.active) return;
+
+                this.trail.push({x: this.x, y: this.y});
+                if (this.trail.length > 80) this.trail.shift();
+
+                // Gravity toward sun
+                const dx = cx - this.x;
+                const dy = cy - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 5) {
+                    const force = G / (dist * dist);
+                    this.vx += (dx / dist) * force;
+                    this.vy += (dy / dist) * force;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.age++;
+
+                // Off screen or too old = deactivate
+                if (this.x < -100 || this.x > width + 100 || this.y < -100 || this.y > height + 100 || this.age > this.maxAge) {
+                    this.active = false;
+                }
+
+                // Hit the sun
+                const sunDist = Math.sqrt((this.x - cx) ** 2 + (this.y - cy) ** 2);
+                if (sunDist < SUN_RADIUS + 5) {
+                    this.active = false;
+                }
+            }
+
+            draw() {
+                if (!this.active && this.trail.length === 0) return;
+
+                // Trail
+                for (let i = 1; i < this.trail.length; i++) {
+                    const alpha = (i / this.trail.length) * 0.6;
+                    ctx.beginPath();
+                    ctx.moveTo(this.trail[i - 1].x, this.trail[i - 1].y);
+                    ctx.lineTo(this.trail[i].x, this.trail[i].y);
+                    ctx.strokeStyle = this.color.replace(')', `,${alpha})`).replace('rgb', 'rgba');
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                if (!this.active) return;
+
+                // Projectile glow
+                const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, 12);
+                grad.addColorStop(0, '#fff');
+                grad.addColorStop(0.3, this.color);
+                grad.addColorStop(1, 'transparent');
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 12, 0, Math.PI * 2);
+                ctx.fillStyle = grad;
+                ctx.fill();
+
+                // Core
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+
+            checkCollision(planet) {
+                if (!this.active) return false;
+                return planet.containsPoint(this.x, this.y);
+            }
+        }
+
+        function drawSun() {
+            // Outer glow
+            const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, SUN_RADIUS * 4);
+            grad.addColorStop(0, 'rgba(255, 200, 50, 0.3)');
+            grad.addColorStop(0.3, 'rgba(255, 150, 0, 0.1)');
+            grad.addColorStop(1, 'transparent');
+            ctx.beginPath();
+            ctx.arc(cx, cy, SUN_RADIUS * 4, 0, Math.PI * 2);
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            // Sun body
+            const sunGrad = ctx.createRadialGradient(
+                cx - SUN_RADIUS * 0.3, cy - SUN_RADIUS * 0.3, 0,
+                cx, cy, SUN_RADIUS
+            );
+            sunGrad.addColorStop(0, '#fff8e0');
+            sunGrad.addColorStop(0.5, '#ffcc33');
+            sunGrad.addColorStop(1, '#ff8800');
+            ctx.beginPath();
+            ctx.arc(cx, cy, SUN_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = sunGrad;
+            ctx.shadowBlur = 50;
+            ctx.shadowColor = '#ff8800';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Solar flares
+            const flareCount = 5;
+            for (let i = 0; i < flareCount; i++) {
+                const angle = (i / flareCount) * Math.PI * 2 + frameCount * 0.005;
+                const flareLen = SUN_RADIUS * (0.5 + Math.sin(frameCount * 0.03 + i) * 0.3);
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                const ex = cx + Math.cos(angle) * (SUN_RADIUS + flareLen);
+                const ey = cy + Math.sin(angle) * (SUN_RADIUS + flareLen);
+                ctx.lineTo(ex, ey);
+                ctx.strokeStyle = `rgba(255,200,50,${0.2 + Math.sin(frameCount * 0.05 + i * 2) * 0.1})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+
+        function drawStars() {
+            // Stars generated deterministically from position
+            for (let i = 0; i < 120; i++) {
+                const seed = i * 137.508;
+                const sx = ((seed * 7.31) % 1) * width;
+                const sy = ((seed * 13.37) % 1) * height;
+                const brightness = 0.3 + ((seed * 3.14) % 0.7);
+                const twinkle = Math.sin(frameCount * 0.02 + i * 1.7) * 0.3 + 0.7;
+                ctx.beginPath();
+                ctx.arc(sx, sy, 0.8 + ((seed * 2.71) % 0.8), 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255,255,255,${brightness * twinkle})`;
+                ctx.fill();
+            }
+        }
+
+        function init() {
+            const orbit1 = Math.min(width, height) * 0.2;
+            const orbit2 = Math.min(width, height) * 0.3;
+            p1 = new Planet(18, orbit1, 0.003, '#00ffff', 0);
+            p2 = new Planet(14, orbit2, 0.002, '#ff00ff', Math.PI);
+            p1.power = 60;
+            p2.power = 60;
+            p1.aimAngle = Math.PI * 0.75;
+            p2.aimAngle = Math.PI * 1.25;
+            projectile = null;
+            currentPlayer = 1;
+            state = 'aiming';
+            updateUI();
+        }
+
+        function fire() {
+            if (state !== 'aiming') return;
+            
+            const planet = currentPlayer === 1 ? p1 : p2;
+            const color = currentPlayer === 1 ? '#00ffff' : '#ff00ff';
+            
+            const tipX = planet.x + Math.cos(planet.aimAngle) * (planet.r + 18);
+            const tipY = planet.y + Math.sin(planet.aimAngle) * (planet.r + 18);
+            
+            projectile = new Projectile(tipX, tipY, planet.aimAngle, planet.power, color);
+            state = 'firing';
+        }
+
+        function checkHit() {
+            const target = currentPlayer === 1 ? p2 : p1;
+            if (projectile && projectile.active && projectile.checkCollision(target)) {
+                projectile.active = false;
+                scores[currentPlayer]++;
+                updateUI();
+                showMessage(`DIRECT HIT! Player ${currentPlayer} scores!`, target.color);
+                state = 'reset';
+                setTimeout(() => {
+                    init();
+                }, 2000);
+                return true;
+            }
+            return false;
+        }
+
+        function showMessage(text, color) {
+            messageBox.textContent = text;
+            messageBox.style.color = color || '#fff';
+            messageBox.style.opacity = 1;
+            setTimeout(() => {
+                messageBox.style.opacity = 0;
+            }, 1800);
+        }
+
+        function handleInput() {
+            if (state !== 'aiming') return;
+
+            const planet = currentPlayer === 1 ? p1 : p2;
+            const step = 0.04;
+
+            if (keys['a'] || keys['arrowleft']) {
+                planet.aimAngle -= step;
+            }
+            if (keys['d'] || keys['arrowright']) {
+                planet.aimAngle += step;
+            }
+            if (keys['w'] || keys['arrowup']) {
+                planet.power = Math.min(100, planet.power + 0.8);
+            }
+            if (keys['s'] || keys['arrowdown']) {
+                planet.power = Math.max(10, planet.power - 0.8);
+            }
+
+            updateUI();
+        }
+
+        function updateUI() {
+            const planet = currentPlayer === 1 ? p1 : p2;
+            if (planet) {
+                const degrees = ((planet.aimAngle * 180 / Math.PI) % 360 + 360) % 360;
+                angleDisplay.textContent = Math.round(degrees);
+                powerDisplay.textContent = Math.round(planet.power);
+            }
+            turnIndicator.textContent = `Player ${currentPlayer}'s Turn`;
+            turnIndicator.className = currentPlayer === 1 ? 'p1-text' : 'p2-text';
+            scoreP1.textContent = scores[1];
+            scoreP2.textContent = scores[2];
+        }
+
+        function gameLoop() {
+            frameCount++;
+
+            // Update planet positions
+            if (p1) p1.updatePosition();
+            if (p2) p2.updatePosition();
+
+            // Handle aiming input
+            handleInput();
+
+            // Update projectile
+            if (projectile) {
+                projectile.update();
+                if (!checkHit() && projectile && !projectile.active) {
+                    // Missed! Switch turns
+                    if (state === 'firing') {
+                        const prevPlayer = currentPlayer;
+                        currentPlayer = currentPlayer === 1 ? 2 : 1;
+                        state = 'aiming';
+                        projectile = null;
+                        showMessage(`Player ${prevPlayer} missed!`, '#ff6666');
+                        updateUI();
+                    }
+                }
+            }
+
+            // Render
+            ctx.fillStyle = '#050510';
+            ctx.fillRect(0, 0, width, height);
+
+            drawStars();
+            drawSun();
+
+            if (p1) p1.draw();
+            if (p2) p2.draw();
+            if (projectile) projectile.draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Event Listeners ---
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+
+            if (e.key === ' ') {
+                e.preventDefault();
+                fire();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        restartBtn.addEventListener('click', () => {
+            scores = { 1: 0, 2: 0 };
+            init();
+            projectile = null;
+            state = 'aiming';
+            showMessage('New Game!', '#fff');
+            updateUI();
+        });
+
+        // --- Start ---
+        init();
+        gameLoop();
+    </script>
+</body>
+</html>
